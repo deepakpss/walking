@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StrideTrack - Walking App</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        
+        /* Glassmorphism Classes */
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Animations */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.5; }
+            100% { transform: scale(1.3); opacity: 0; }
+        }
+        .animate-ring::before {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            border: 2px solid #ef4444;
+            animation: pulse-ring 1.5s infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-950 text-white min-h-screen relative overflow-x-hidden selection:bg-cyan-500/30">
+
+    <div class="fixed top-[-10%] left-[-10%] w-[50%] h-[50%] bg-purple-600/20 rounded-full blur-[120px] pointer-events-none"></div>
+    <div class="fixed bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-cyan-500/20 rounded-full blur-[120px] pointer-events-none"></div>
+
+    <div class="relative z-10 max-w-md mx-auto min-h-screen flex flex-col p-6">
+        
+        <header class="flex justify-between items-center mb-8">
+            <div class="flex items-center gap-2">
+                <div class="p-2 bg-gradient-to-tr from-cyan-400 to-purple-500 rounded-lg shadow-lg shadow-cyan-500/20">
+                    <i class="ph-fill ph-person-simple-walk text-white text-xl"></i>
+                </div>
+                <h1 class="text-xl font-bold tracking-tight">Stride<span class="text-cyan-400">Track</span></h1>
+            </div>
+            <div id="dateDisplay" class="bg-white/5 border border-white/10 px-3 py-1 rounded-full text-xs font-medium text-gray-400">
+                --/--/----
+            </div>
+        </header>
+
+        <div class="glass rounded-3xl p-8 mb-8 relative overflow-hidden shadow-2xl transition-all duration-500" id="mainCard">
+            <div id="activeGlow" class="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-purple-500/10 opacity-0 transition-opacity duration-500 pointer-events-none"></div>
+
+            <div class="relative z-10 flex flex-col items-center justify-center py-2">
+                <span class="text-gray-400 text-sm uppercase tracking-wider mb-2 font-medium">Today's Distance</span>
+                
+                <div class="flex items-baseline gap-2">
+                    <span id="distanceValue" class="text-7xl font-extrabold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent tabular-nums leading-none">0</span>
+                    <span id="distanceUnit" class="text-2xl text-cyan-400 font-medium">m</span>
+                </div>
+
+                <div class="flex w-full justify-between mt-8 px-2">
+                    <div class="flex flex-col items-center">
+                        <span class="text-xs text-gray-500 mb-1">Session</span>
+                        <span id="sessionValue" class="text-lg font-semibold">0 m</span>
+                    </div>
+                    <div class="w-[1px] bg-white/10 h-10"></div>
+                    <div class="flex flex-col items-center">
+                        <span class="text-xs text-gray-500 mb-1">Speed</span>
+                        <span class="text-lg font-semibold"><span id="speedValue">0.0</span> <span class="text-xs text-gray-400">km/h</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="errorMsg" class="hidden bg-red-500/10 border border-red-500/20 text-red-200 p-4 rounded-xl mb-6 text-sm flex items-center gap-2">
+            <i class="ph ph-warning-circle text-lg"></i>
+            <span id="errorText"></span>
+        </div>
+
+        <div class="flex justify-center mb-10">
+            <button id="toggleBtn" class="relative flex items-center justify-center w-20 h-20 rounded-full shadow-lg transition-all duration-300 bg-cyan-500 text-black hover:bg-cyan-400 hover:shadow-cyan-500/40">
+                <i id="btnIcon" class="ph-fill ph-play text-3xl ml-1"></i>
+            </button>
+        </div>
+
+        <div class="flex-1">
+            <div class="flex items-center gap-2 mb-4">
+                <i class="ph ph-chart-bar text-purple-400 text-lg"></i>
+                <h3 class="text-lg font-semibold">Weekly Activity</h3>
+            </div>
+            
+            <div class="glass rounded-2xl p-4 h-64">
+                <canvas id="historyChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Variables ---
+        let isTracking = false;
+        let watchId = null;
+        let prevCoords = null;
+        let sessionDistance = 0;
+        let dailyTotal = 0;
+        let historyData = {};
+
+        // --- Elements ---
+        const distanceValEl = document.getElementById('distanceValue');
+        const distanceUnitEl = document.getElementById('distanceUnit');
+        const sessionValEl = document.getElementById('sessionValue');
+        const speedValEl = document.getElementById('speedValue');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const btnIcon = document.getElementById('btnIcon');
+        const activeGlow = document.getElementById('activeGlow');
+        const errorMsg = document.getElementById('errorMsg');
+        const errorText = document.getElementById('errorText');
+        const dateDisplay = document.getElementById('dateDisplay');
+
+        // --- Helper: Get Date ---
+        const getTodayDate = () => new Date().toISOString().split('T')[0];
+        dateDisplay.innerText = getTodayDate();
+
+        // --- Helper: Haversine Formula (Calculate Distance) ---
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; // Earth radius in meters
+            const toRad = val => (val * Math.PI) / 180;
+            const dLat = toRad(lat2 - lat1);
+            const dLon = toRad(lon2 - lon1);
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        // --- Formatting ---
+        function formatDist(meters) {
+            if (meters >= 1000) return (meters / 1000).toFixed(2);
+            return Math.floor(meters);
+        }
+        function getUnit(meters) { return meters >= 1000 ? 'km' : 'm'; }
+
+        function updateDisplay() {
+            // Main Display
+            distanceValEl.innerText = formatDist(dailyTotal);
+            distanceUnitEl.innerText = getUnit(dailyTotal);
+            
+            // Session Display
+            sessionValEl.innerText = `${formatDist(sessionDistance)} ${getUnit(sessionDistance)}`;
+            
+            // Save to LocalStorage
+            historyData[getTodayDate()] = dailyTotal;
+            localStorage.setItem('walkingHistory', JSON.stringify(historyData));
+            
+            // Update Chart
+            updateChart();
+        }
+
+        // --- Chart Logic (Chart.js) ---
+        let chartInstance = null;
+
+        function initChart() {
+            const ctx = document.getElementById('historyChart').getContext('2d');
+            
+            // Prepare Data for last 7 days
+            const labels = [];
+            const dataPoints = [];
+            const backgroundColors = [];
+
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date();
+                d.setDate(d.getDate() - i);
+                const dateStr = d.toISOString().split('T')[0];
+                const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+                
+                labels.push(dayName);
+                dataPoints.push(historyData[dateStr] || 0);
+                
+                // Highlight today in Cyan, others in Gray
+                if(dateStr === getTodayDate()) {
+                    backgroundColors.push('#22d3ee'); // Cyan
+                } else {
+                    backgroundColors.push('#4b5563'); // Gray
+                }
+            }
+
+            if(chartInstance) chartInstance.destroy();
+
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Distance (m)',
+                        data: dataPoints,
+                        backgroundColor: backgroundColors,
+                        borderRadius: 4,
+                        borderSkipped: false,
+                        barThickness: 12
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#111827',
+                            titleColor: '#fff',
+                            bodyColor: '#ccc',
+                            borderColor: 'rgba(255,255,255,0.1)',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let val = context.raw;
+                                    let label = val >= 1000 ? (val/1000).toFixed(2) + ' km' : val + ' m';
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            display: false, // Hide Y axis for cleaner look
+                            grid: { display: false }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#9ca3af', font: { size: 10 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateChart() {
+            // Simply re-init for simplicity in vanilla JS or update logic could be added
+            initChart();
+        }
+
+        // --- Load Data ---
+        function loadData() {
+            const saved = localStorage.getItem('walkingHistory');
+            if (saved) {
+                historyData = JSON.parse(saved);
+                if (historyData[getTodayDate()]) {
+                    dailyTotal = historyData[getTodayDate()];
+                }
+            }
+            updateDisplay();
+            initChart(); // Initialize chart on load
+        }
+
+        // --- Tracking Logic ---
+        function startTracking() {
+            if (!navigator.geolocation) {
+                showError("Geolocation not supported.");
+                return;
+            }
+
+            isTracking = true;
+            toggleBtn.classList.remove('bg-cyan-500', 'text-black', 'hover:bg-cyan-400');
+            toggleBtn.classList.add('bg-red-500/10', 'text-red-400', 'border', 'border-red-500/50', 'animate-ring');
+            btnIcon.classList.remove('ph-play', 'ml-1');
+            btnIcon.classList.add('ph-pause');
+            activeGlow.classList.remove('opacity-0');
+            
+            errorMsg.classList.add('hidden');
+            prevCoords = null; // Reset session start reference
+
+            watchId = navigator.geolocation.watchPosition(
+                (position) => {
+                    const { latitude, longitude, speed } = position.coords;
+                    
+                    // Update Speed
+                    if (speed !== null && speed >= 0) {
+                        speedValEl.innerText = (speed * 3.6).toFixed(1);
+                    }
+
+                    if (prevCoords) {
+                        const dist = calculateDistance(
+                            prevCoords.latitude,
+                            prevCoords.longitude,
+                            latitude,
+                            longitude
+                        );
+
+                        // Noise Filter: Only count if moved > 2 meters
+                        if (dist > 2) {
+                            sessionDistance += dist;
+                            dailyTotal += dist;
+                            updateDisplay();
+                        }
+                    }
+                    prevCoords = { latitude, longitude };
+                },
+                (err) => {
+                    showError(err.message);
+                    stopTracking();
+                },
+                { enableHighAccuracy: true, maximumAge: 0 }
+            );
+        }
+
+        function stopTracking() {
+            isTracking = false;
+            navigator.geolocation.clearWatch(watchId);
+            
+            toggleBtn.classList.add('bg-cyan-500', 'text-black', 'hover:bg-cyan-400');
+            toggleBtn.classList.remove('bg-red-500/10', 'text-red-400', 'border', 'border-red-500/50', 'animate-ring');
+            btnIcon.classList.add('ph-play', 'ml-1');
+            btnIcon.classList.remove('ph-pause');
+            activeGlow.classList.add('opacity-0');
+            speedValEl.innerText = "0.0";
+        }
+
+        function showError(msg) {
+            errorText.innerText = msg;
+            errorMsg.classList.remove('hidden');
+        }
+
+        // --- Event Listeners ---
+        toggleBtn.addEventListener('click', () => {
+            if (isTracking) stopTracking();
+            else startTracking();
+        });
+
+        // Initialize
+        loadData();
+
+    </script>
+</body>
+</html>
